@@ -8,6 +8,7 @@ local config = {
   keymaps = {
     toggle = nil,
     quit = '<C-q>', -- Default: Ctrl+q to quit
+    send_selection = '<C-l>', -- Visual-mode keybind to send selection
   },
   border = 'single',
   width = 0.8,
@@ -18,6 +19,35 @@ local config = {
   panel     = false,   -- if true, open Codex in a side-panel instead of floating window
   use_buffer = false,  -- if true, capture Codex stdout into a normal buffer instead of a terminal
 }
+
+local function get_visual_selection()
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  if start_pos[2] == 0 or end_pos[2] == 0 then
+    return nil
+  end
+
+  local start_row, start_col = start_pos[2], start_pos[3]
+  local end_row, end_col = end_pos[2], end_pos[3]
+  if start_row > end_row or (start_row == end_row and start_col > end_col) then
+    start_row, end_row = end_row, start_row
+    start_col, end_col = end_col, start_col
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(0, start_row - 1, end_row, false)
+  if #lines == 0 then
+    return nil
+  end
+
+  if #lines == 1 then
+    lines[1] = string.sub(lines[1], start_col, end_col)
+  else
+    lines[1] = string.sub(lines[1], start_col)
+    lines[#lines] = string.sub(lines[#lines], 1, end_col)
+  end
+
+  return table.concat(lines, '\n')
+end
 
 function M.setup(user_config)
   config = vim.tbl_deep_extend('force', config, user_config or {})
@@ -30,8 +60,16 @@ function M.setup(user_config)
     M.toggle()
   end, { desc = 'Toggle Codex popup (alias)' })
 
+  vim.api.nvim_create_user_command('CodexSendSelection', function(opts)
+    M.send_selection(opts)
+  end, { desc = 'Send visual selection to Codex', range = true })
+
   if config.keymaps.toggle then
     vim.api.nvim_set_keymap('n', config.keymaps.toggle, '<cmd>CodexToggle<CR>', { noremap = true, silent = true })
+  end
+
+  if config.keymaps.send_selection then
+    vim.api.nvim_set_keymap('v', config.keymaps.send_selection, '<cmd>CodexSendSelection<CR>', { noremap = true, silent = true })
   end
 end
 
@@ -235,6 +273,33 @@ function M.toggle()
   else
     M.open()
   end
+end
+
+function M.send_selection(opts)
+  local selection = nil
+  if opts and opts.range and opts.range > 0 then
+    selection = get_visual_selection()
+    if not selection then
+      local lines = vim.api.nvim_buf_get_lines(0, opts.line1 - 1, opts.line2, false)
+      selection = table.concat(lines, '\n')
+    end
+  end
+
+  if not selection or selection == '' then
+    vim.notify('[codex.nvim] No selection to send.', vim.log.levels.WARN)
+    return
+  end
+
+  if not (state.win and vim.api.nvim_win_is_valid(state.win)) then
+    M.open()
+  end
+
+  if not state.job then
+    vim.notify('[codex.nvim] Codex is not running.', vim.log.levels.WARN)
+    return
+  end
+
+  vim.fn.chansend(state.job, selection .. '\n')
 end
 
 function M.statusline()

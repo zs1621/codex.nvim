@@ -24,6 +24,7 @@ describe('codex.nvim', function()
     local cmds = vim.api.nvim_get_commands {}
     assert(cmds['Codex'], 'Codex command not found')
     assert(cmds['CodexToggle'], 'CodexToggle command not found')
+    assert(cmds['CodexSendSelection'], 'CodexSendSelection command not found')
   end)
 
   it('opens a floating terminal window', function()
@@ -108,6 +109,76 @@ describe('codex.nvim', function()
     assert(vim.tbl_contains(received_cmd, 'o3-mini'), 'should include specified model name')
 
     -- Restore original
+    vim.fn = original_fn
+  end)
+
+  it('sends visual selection to a running job and opens if closed', function()
+    local codex = require 'codex'
+    local state = require 'codex.state'
+
+    codex.setup { cmd = { 'echo', 'test' } }
+
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'alpha beta', 'gamma' })
+    vim.fn.setpos("'<", { 0, 1, 7, 0 })
+    vim.fn.setpos("'>", { 0, 2, 3, 0 })
+
+    local original_fn = vim.fn
+    local sent = nil
+    vim.fn = setmetatable({
+      chansend = function(_, payload)
+        sent = payload
+        return 0
+      end,
+    }, { __index = original_fn })
+
+    local open_called = false
+    local original_open = codex.open
+    codex.open = function()
+      open_called = true
+      state.win = vim.api.nvim_get_current_win()
+    end
+
+    state.win = nil
+    state.job = 1
+
+    codex.send_selection { range = 2, line1 = 1, line2 = 2 }
+
+    eq(sent, 'beta\ngam\n')
+    assert(open_called, 'Codex should open when window is closed')
+
+    codex.open = original_open
+    vim.fn = original_fn
+  end)
+
+  it('does not open Codex when already open', function()
+    local codex = require 'codex'
+    local state = require 'codex.state'
+
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'one two' })
+    vim.fn.setpos("'<", { 0, 1, 1, 0 })
+    vim.fn.setpos("'>", { 0, 1, 3, 0 })
+
+    local original_fn = vim.fn
+    vim.fn = setmetatable({
+      chansend = function()
+        return 0
+      end,
+    }, { __index = original_fn })
+
+    local open_called = false
+    local original_open = codex.open
+    codex.open = function()
+      open_called = true
+    end
+
+    state.win = vim.api.nvim_get_current_win()
+    state.job = 1
+
+    codex.send_selection { range = 2, line1 = 1, line2 = 1 }
+
+    assert(not open_called, 'Codex should not open when already open')
+
+    codex.open = original_open
     vim.fn = original_fn
   end)
 end)
